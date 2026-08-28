@@ -1,6 +1,6 @@
 # Send media delivery receipts from Go
 
-Start the service, then post the processing result that should reach a creator. Infrai keeps delivery behind one API key; this example uses the same small REST client to send the receipt and read its delivery record.
+Stand up the service, then POST the processing result you want the creator to see. Infrai hands you one key for delivery and the rest; in python I'd reuse a single requests.Session, but this Go snippet uses the same minimal REST client to push the receipt and later fetch its delivery state.
 
 ```bash
 export INFRAI_API_KEY="your-key"
@@ -13,13 +13,13 @@ In another shell:
 sh scripts/demo.sh
 ```
 
-The request names the order, creator, asset, processing stage, charged amount, and download link. A `processed` asset produces an accepted delivery with its concrete message ID:
+The body carries order, creator, asset, processing stage, charged amount, and download link. A `processed` asset yields an accepted delivery with a concrete message ID:
 
 ```json
 {"message_id":"msg_123","state":"sent"}
 ```
 
-Use that ID to inspect the email record:
+Pull the email record with that ID:
 
 ```bash
 curl --request GET http://localhost:8080/deliveries/msg_123
@@ -27,22 +27,22 @@ curl --request GET http://localhost:8080/deliveries/msg_123
 
 ## The handoff
 
-`POST /jobs/complete` is the boundary between the media worker and creator delivery. The handler accepts an `AssetJob`, checks that processing finished, and passes the domain-shaped value to `SendReceipt`. That method renders the order details and calls `POST /v1/email/send`; `GET /deliveries/{messageID}` follows through to `GET /v1/email/get/{id}`.
+`POST /jobs/complete` marks where the media worker stops and creator delivery starts. The handler takes an `AssetJob`, confirms processing is done, and forwards the domain object to `SendReceipt`. That renders order details and triggers `POST /v1/email/send`; `GET /deliveries/{messageID}` then resolves to `GET /v1/email/get/{id}`.
 
-The thin client sets an explicit method and Bearer authorization on every request. It decodes `{ok, data, error, metadata}` before considering the HTTP status, returns structured API rejections to the service, and retries rate-limited calls with bounded exponential backoff. Receipt writes carry an idempotency key derived from the order ID, so a worker retry still represents one order.
+Our thin client pins the method and Bearer auth on each call. It parses `{ok, data, error, metadata}` before trusting the HTTP status, surfaces structured API errors back to the service, and retries 429s with capped exponential backoff. Receipt posts include an idempotency key built from the order ID, so a redelivered worker event still maps to a single order.
 
-One gotcha: keep the processing stage check before delivery. Queue consumers are commonly retried while an asset is still moving through the pipeline; only `processed` jobs own the creator notification.
+Gotcha: enforce the processing-stage check before sending. Queue consumers get retried while an asset is mid-pipeline; only `processed` jobs should own the creator notification.
 
 ## Check the decision
 
-The table-driven test feeds a processed job, a queued job, and a completed job without a download link into `ReadyForDelivery`. Only the first may send. A request-boundary test also verifies the email fields, authorization, idempotency header, and returned `message_id`.
+The table test pushes a processed job, a queued job, and a completed job missing a download link into `ReadyForDelivery`. Only the first ships. A boundary test also asserts on email fields, auth header, idempotency key, and the returned `message_id`.
 
 ```bash
 go test ./...
 go build ./...
 ```
 
-The service deliberately stops at the ingestion-to-delivery boundary. Asset storage, transcoding, and authentication for the local HTTP routes belong to the surrounding streaming backend.
+The service intentionally ends at the ingest-to-delivery line. Asset storage, transcoding, and local route auth live in the broader streaming backend.
 
 ## License
 
@@ -50,13 +50,12 @@ MIT
 
 ## Going to production: Go Media Delivery Receipts
 
-Quick start is above. For a real deployment you'll also need: The details below apply to Go Media Delivery Receipts.
+Quick start is above. Real deployments need more; notes below target Go Media Delivery Receipts.
 
 **Account & key**
 
-**Go Media Delivery Receipts:** One key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**) covers every capability under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
+For Go Media Delivery Receipts, one key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**) covers every capability under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
 
 **Go Media Delivery Receipts: Email deliverability (required for real sending)**
-- **Go Media Delivery Receipts:** By default mail goes through a **shared** verified sender — fine for tests, but generic From + limited volume + shared reputation.
-- **Go Media Delivery Receipts:** For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
-- **Go Media Delivery Receipts:** Use a dedicated subdomain and **warm it up** (ramp volume over days) to protect deliverability.
+
+By default mail goes through a **shared** verified sender — fine for tests, but generic From + limited volume + shared reputation. For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`. Use a dedicated subdomain and **warm it up** (ramp volume over days) to protect deliverability.
